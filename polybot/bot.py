@@ -158,5 +158,4 @@ class ObjectDetectionBot(Bot):
             raise error
         else:
             return response
-
         # Not TODO: send message to the Telegram end-user (e.g., Your image is being processed. Please wait...)
