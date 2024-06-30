@@ -9,6 +9,8 @@ on:
 
 jobs:
   Build:
+    outputs:
+      image_ver: ${{ steps.build.outputs.image_ver }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the repo code
@@ -18,15 +20,31 @@ jobs:
         run: |
           cd polybot
           
-          # Login to DockerHub
-          echo "${{ secrets.DOCKER_REPO_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_REPO_USERNAME }}" --password-stdin
+#          # Login to DockerHub
+#          echo "${{ secrets.DOCKER_REPO_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_REPO_USERNAME }}" --password-stdin
+#
+#          IMAGE_NAME=raoofk/awspolybot:${{ github.run_number }}
+#          docker build -t $IMAGE_NAME .
+#          docker push $IMAGE_NAME
+          
+          # Login to ECR 
+          export AWS_ACCESS_KEY_ID=${{ secrets.aws_access_key }}
+          export AWS_SECRET_ACCESS_KEY=${{ secrets.aws_secret_access_key }}
+          aws ecr get-login-password --region us-west-1 | docker login --username AWS --password-stdin 019273956931.dkr.ecr.us-west-1.amazonaws.com
 
-          IMAGE_NAME=raoofk/awspolybot:${{ github.run_number }}
+          IMAGE_VER=prod-0.0.${{ github.run_number }}
+          IMAGE_NAME=aws-project-polybot:$IMAGE_VER
           docker build -t $IMAGE_NAME .
-          docker push $IMAGE_NAME         
+          docker tag $IMAGE_NAME 019273956931.dkr.ecr.us-west-1.amazonaws.com/$IMAGE_NAME
+          docker push 019273956931.dkr.ecr.us-west-1.amazonaws.com/$IMAGE_NAME
+          echo "image_ver=$IMAGE_VER" >> "$GITHUB_OUTPUT"
 
   Deploy:
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key}}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
+      IMAGE_VER: ${{ needs.Build.outputs.image_ver }}
     needs:
       - Build
 
@@ -34,6 +52,111 @@ jobs:
       - name: Checkout the repo code
         uses: actions/checkout@v2
       - name: Deploy new version
-        run: |         
-          # TODO your implementation here....     
+        id:
+         set_ip
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key}}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
+          IMAGE_VER: ${{ needs.Build.outputs.image_ver }}
+        run: |
+          tag_key="App"
+          tag_value="polybot"
+          desired_healthy_instances='2'
+          
+          # AWS CLI command to describe instances with the specified tag
+          instance_info=$(aws ec2 describe-instances --region "us-west-1"\
+            --query 'Reservations[*].Instances[*].{InstanceId:InstanceId}' \
+            --filters "Name=tag:App,Values=polybot" \
+            --output text)
+          
+          # Output the the tag:
+          echo "the tag key is: $tag_key and the value is: $tag_value"
+          
+          echo "
+            ----
+          $instance_info
+            ----
+          "
+          echo "this is line 78"
+          # echo "instance_info=\"${instance_info}\"" >> "$GITHUB_ENV"
+          echo "this is line is 80"
+          
+          # Check if instance_info is not empty
+          if [ -n "$instance_info" ]; then
+            # Extract instance IDs from JSON
+            instance_ids=$instance_info
+          
+          else
+            echo "No instances found with tag ${tag_key}=${tag_value}"
+            echo $IPS
+            exit 1
+          fi
+          # Iterate through each instance ID
+          # instance_ids=${{ steps.validate_inst.outputs.instance_ids }}
+          for instance_id in $instance_ids; do
+          
+            # Check if instance is running
+            state=$(aws ec2 describe-instances --region "us-west-1" \
+              --query 'Reservations[*].Instances[*].{State:State.Name}' \
+              --filters "Name=instance-id,Values=$instance_id" \
+              --output text)
+          
+            echo "Instance ID: $instance_id"
+            echo "Current State: $state"
+          
+            if [ "$state" != "running" ]; then
+              echo "Starting instance..."
+              aws ec2 start-instances --region "us-west-1" --instance-ids $instance_id
+          
+              # Wait until the instance is running
+              aws ec2 wait instance-running --region "us-west-1" --instance-ids $instance_id
+          
+              # Retrieve updated information after starting
+            fi
+          done
+          public_ips=$(aws ec2 describe-instances --region "us-west-1" \
+            --query 'Reservations[*].Instances[*].{PublicIpAddress:PublicIpAddress}' \
+            --filters "Name=tag:${tag_key},Values=${tag_value}" \
+            --output text)
+          echo $public_ips
+          
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" >> tempkey.pem
+          chmod 400 "tempkey.pem"
+          IMAGEVER=$IMAGE_VER
+          echo $public_ips
+          
+          IFS=$'\n'
+          for IP in $public_ips; do
+            echo "first of loop"
+            ssh -i tempkey.pem -o StrictHostKeyChecking=no "ubuntu@$IP" "
+              aws ecr get-login-password \
+                --region ${{ env.REGION }} | sudo -u ubuntu docker login --username AWS \
+                --password-stdin 019273956931.dkr.ecr.us-west-1.amazonaws.com;
+          
+              echo "second part"  
+              docker stop $(docker ps -q -a);
+              docker stop poly;
+              docker container prune -f;
+              docker run --restart on-failure \
+                --name poly -d -p 8443:8443 \
+                019273956931.dkr.ecr.us-west-1.amazonaws.com/aws-project-polybot:$IMAGEVER;"
+          
+            echo "check"
+          
+            healthy_instances="$(aws elbv2 describe-target-health --region "us-west-1" \
+            --target-group-arn arn:aws:elasticloadbalancing:us-west-1:019273956931:targetgroup/AWSnewtargetgroup-instances/ce589ac86521aebc --output json | grep "\"State\": \"healthy\"" | wc -l)"
+          
+            echo "$healthy_instances"
+            if [ "$healthy_instances" != "$desired_healthy_instances" ]; then
+              echo "Start sleeping"
+              sleep 180
+              healthy_instances="$(aws elbv2 describe-target-health \
+              --target-group-arn arn:aws:elasticloadbalancing:us-west-1:019273956931:targetgroup/AWSnewtargetgroup-instances/ce589ac86521aebc --output text \
+              | grep "healthy" | wc -l)"
+            fi
+            if [ "$healthy_instances" != "$desired_healthy_instances" ]; then
+              echo "One or more of the instances are not healthy after the update, please check the logs."
+              exit 1
+            fi
+          done
      
