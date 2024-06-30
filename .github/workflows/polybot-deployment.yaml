@@ -18,7 +18,12 @@ jobs:
         run: |
           cd polybot
           
-          # TODO your implementation here....          
+          # Login to DockerHub
+          echo "${{ secrets.DOCKER_REPO_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_REPO_USERNAME }}" --password-stdin
+
+          IMAGE_NAME=raoofk/awspolybot:${{ github.run_number }}
+          docker build -t $IMAGE_NAME .
+          docker push $IMAGE_NAME         
 
   Deploy:
     runs-on: ubuntu-latest
