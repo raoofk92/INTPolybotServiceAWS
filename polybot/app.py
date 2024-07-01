@@ -1,24 +1,56 @@
-import flask
-from flask import request
+import json
 import os
-
-import getsecret
+from loguru import logger
 import boto3
+import flask
+from botocore.exceptions import ClientError
+from flask import request
 from bot import ObjectDetectionBot
+import getsecret
 
-import polybot_supp
 
-
-dynamo_client = boto3.client('dynamodb', region_name='us-west-1')
 
 app = flask.Flask(__name__)
 
-
 TELEGRAM_TOKEN = getsecret.get_secret()
-TELEGRAM_APP_URL = os.environ['TELEGRAM_APP_URL']
-DYNAMODB_TABLE_NAME = os.environ['DYNAMO_NAME']
-S3_IMAGE_BUCKET = os.environ['S3_BUCKET']
+# TODO load TELEGRAM_TOKEN value from Secret Manager
+def get_secret():
 
+    region_name = os.environ['regionraoof']
+
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+
+    try:
+        get_secret_value_response = client.get_secret_value(
+            SecretId=TELEGRAM_TOKEN
+        )
+    except ClientError as e:
+        # For a list of exceptions thrown, see
+        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+        raise e
+
+    secret = get_secret_value_response['SecretString']
+    return secret
+
+
+secret_json_str = get_secret()
+if secret_json_str:
+    secret_dict = json.loads(secret_json_str)
+    TELEGRAM_TOKEN = secret_dict.get('TELEGRAM_TOKEN')
+else:
+    print("Failed to retrieve the secret")
+
+TELEGRAM_APP_URL = os.environ['TELEGRAM_APP_URL']
+
+
+@app.route('/health_check', methods=['GET'])
+def health_checks():
+    return 'Ok', 200
 
 
 @app.route('/', methods=['GET'])
@@ -35,27 +67,46 @@ def webhook():
 
 @app.route(f'/results', methods=['POST'])
 def results():
-    prediction_id = request.args.get('predictionId')
+    # TODO use the prediction_id to retrieve results from DynamoDB and send to the end-user
+    region_name = os.environ['regionraoof']
+    dynamodb = boto3.resource('dynamodb', region_name=region_name)
+    table = dynamodb.Table('raoof-DB')
 
-    if "NONE:" == prediction_id[:5]:
-        bot.send_text(prediction_id[5::], "Nothing to Predict in this picture.")
-    else:
-        # use the prediction_id to retrieve results from DynamoDB and send to the end-user
-        result = dynamo_client.get_item(
-            TableName=DYNAMODB_TABLE_NAME,
-            Key={
-                "prediction_id": {'S': prediction_id}
-            }
-        )
-        print(f"ITEM CONTAIN: {result.get('Item')}")
-        chat_id = result.get('Item').get('chat_id').get('N')
-        print(f"CHAT_ID IS: {chat_id}")
-        text_results = result.get('Item').get('labels').get('L')
-        obj_count = polybot_supp.count_objects_in_list(text_results)
-        answer = polybot_supp.parse_info_to_text(obj_count)
+    logger.info("Received request at /results endpoint")
+    try:
+        prediction_id = flask.request.args.get('predictionId')
+        if not prediction_id:
+            prediction_id = flask.request.json.get('predictionId')
 
-        bot.send_text(chat_id, answer)
-    return 'Ok'
+        if not prediction_id:
+            return 'predictionId is required', 400
+
+        response = table.get_item(Key={'prediction_id': prediction_id})
+        if 'Item' in response:
+            item = response['Item']
+            chat_id = item['chat_id']
+            labels = item['labels']
+
+            class_counts = {}
+            for label in labels:
+                class_name = label['class']
+                if class_name in class_counts:
+                    class_counts[class_name] += 1
+                else:
+                    class_counts[class_name] = 1
+
+            # text_results = f"Prediction results for image {item['original_img_path']}:\n"
+            text_results = ""
+            for class_name, count in class_counts.items():
+                text_results += f"{class_name}: {count}\n"
+
+            bot.send_text(chat_id, text_results)
+            return 'Ok'
+        else:
+            return 'No results found', 404
+    except Exception as e:
+        print(f"Error processing results: {str(e)}")
+        return 'Error', 500
 
 
 @app.route(f'/loadTest/', methods=['POST'])
@@ -66,6 +117,5 @@ def load_test():
 
 
 if __name__ == "__main__":
-    bot = ObjectDetectionBot(TELEGRAM_TOKEN, TELEGRAM_APP_URL, S3_IMAGE_BUCKET)
-
+    bot = ObjectDetectionBot(TELEGRAM_TOKEN, TELEGRAM_APP_URL)
     app.run(host='0.0.0.0', port=8443)
