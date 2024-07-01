@@ -1,87 +1,39 @@
-name: Polybot Deployment
+name: Polybot Microservice Deployment
 
 on:
   push:
+    paths:
+      - 'polybot/**'
     branches:
       - main
 
 jobs:
-  build-deploy:
+  Build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+      - name: Checkout the repo code
+        uses: actions/checkout@v2
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.aws_access_key }}
-        aws-secret-access-key: ${{ secrets.aws_secret_access_key }}
-        aws-region: ${{ secrets.regionraoof }}
+      - name: Build and push image
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
+          AWS_DEFAULT_REGION: 'us-west-1'
+        run: |
+          cd polybot
 
-    - name: Set up Docker Build
-      uses: docker/setup-buildx-action@v2
+          # Login to ECR:
+          aws ecr get-login-password --region ${{ env.AWS_DEFAULT_REGION }} | docker login --username AWS --password-stdin 019273956931.dkr.ecr.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com
 
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.dockerhubuser }}
-        password: ${{ secrets.dockerhubpass }}
+          # Define the base name of the image and the tag separately
+          IMAGE_BASE_NAME=polybot-v2
+          IMAGE_TAG=${{ github.run_number }}
 
-    - name: Build and push Docker image
-      run: |
-        cd polybot
-        docker build -t ${{ secrets.dockerhubuser }}raoofk/awspolybot:latest .
-        docker push ${{ secrets.dockerhubuser }}raoofk/awspolybot:latest
+          # Build the image
+          docker build -t ${IMAGE_BASE_NAME}:${IMAGE_TAG} .
 
-    - name: Set up SSH key
-      run: |
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
-        chmod 600 private_key.pem
+          # Tag the image for ECR
+          docker tag ${IMAGE_BASE_NAME}:${IMAGE_TAG} 019273956931.dkr.ecr.us-west-1.amazonaws.com/raoof-images:${IMAGE_BASE_NAME}-${IMAGE_TAG}
 
-    - name: Deploy to AWS EC2
-      run: |         
-        POLYBOT_INSTANCES=$(aws elbv2 describe-target-health --target-group-arn ${{ secrets.POLYBOT_TARGET_GROUP_ARN }} --query 'TargetHealthDescriptions[*].Target.Id' --output text --region ${{ secrets.AWS_REGION }})
-        echo "POLYBOT_INSTANCES: $POLYBOT_INSTANCES"
-    
-        for instance in $POLYBOT_INSTANCES; do
-          INSTANCE_STATE=$(aws ec2 describe-instances --instance-ids $instance --query 'Reservations[0].Instances[0].State.Name' --output text --region ${{ secrets.AWS_REGION }})
-          
-          if [ "$INSTANCE_STATE" != "running" ]; then
-            echo "Instance $instance is $INSTANCE_STATE. Starting the instance..."
-            aws ec2 start-instances --instance-ids $instance --region ${{ secrets.AWS_REGION }}
-            
-            echo "Waiting for instance $instance to be in running state..."
-            aws ec2 wait instance-running --instance-ids $instance --region ${{ secrets.AWS_REGION }}
-          fi
-    
-          INSTANCE_INFO=$(aws ec2 describe-instances --instance-ids $instance --query 'Reservations[0].Instances[0]' --output json --region ${{ secrets.AWS_REGION }})
-          echo "Instance Info: $INSTANCE_INFO"
-          PUBLIC_IP=$(echo $INSTANCE_INFO | jq -r '.PublicIpAddress')
-    
-          if [ "$PUBLIC_IP" == "null" ] || [ -z "$PUBLIC_IP" ]; then
-            echo "No public IP found for instance $instance"
-            continue
-          fi
-    
-          echo "Instance ID: $instance, Public IP: $PUBLIC_IP"
-    
-          # Retry SSH connection up to 5 times with a delay
-          for attempt in {1..5}; do
-            echo "Attempt $attempt to connect to $PUBLIC_IP"
-            if ssh -o StrictHostKeyChecking=no -i private_key.pem ubuntu@$PUBLIC_IP "echo 'SSH connection successful'"; then
-              echo "SSH connection successful to $PUBLIC_IP"
-              ssh -o StrictHostKeyChecking=no -i private_key.pem ubuntu@$PUBLIC_IP "sudo docker stop polybot || true"
-              ssh -o StrictHostKeyChecking=no -i private_key.pem ubuntu@$PUBLIC_IP "sudo docker rm polybot || true"
-              ssh -o StrictHostKeyChecking=no -i private_key.pem ubuntu@$PUBLIC_IP "sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/polybot:latest"
-              ssh -o StrictHostKeyChecking=no -i private_key.pem ubuntu@$PUBLIC_IP "sudo docker run -d --restart always --name polybot -p 8443:8443 ${{ secrets.DOCKERHUB_USERNAME }}/polybot:latest"
-              break
-            else
-              echo "SSH connection to $PUBLIC_IP failed. Retrying in 10 seconds..."
-              sleep 10
-            fi
-          done
-        done
-      env:
-        AWS_REGION: ${{ secrets.AWS_REGION }}
+          # Push the image to ECR
+          docker push 019273956931.dkr.ecr.us-west-1.amazonaws.com/raoof-images:${IMAGE_BASE_NAME}-${IMAGE_TAG}
