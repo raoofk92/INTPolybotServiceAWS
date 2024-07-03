@@ -18,11 +18,11 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: 'us-east-1'
+          AWS_DEFAULT_REGION: 'us-west-1'
         run: |
           cd yolo5
 
-          # Login to ECR (commend in in case you use ECR, change region code and ECR URI):
+          # Login to ECR (comment in case you use ECR, change region code and ECR URI):
           aws ecr get-login-password --region ${{ env.AWS_DEFAULT_REGION }} | docker login --username AWS --password-stdin 019273956931.dkr.ecr.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com
 
           # Define the base name of the image and the tag separately
@@ -33,10 +33,10 @@ jobs:
           docker build -t ${IMAGE_BASE_NAME}:${IMAGE_TAG} .
 
           # Tag the image for ECR
-          docker tag ${IMAGE_BASE_NAME}:${IMAGE_TAG} 019273956931.dkr.ecr.us-west-1.amazonaws.com/raoof-images:${IMAGE_BASE_NAME}-${IMAGE_TAG}
+          docker tag ${IMAGE_BASE_NAME}:${IMAGE_TAG} 019273956931.dkr.ecr.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/raoof-images:${IMAGE_BASE_NAME}-${IMAGE_TAG}
 
           # Push the image to ECR
-          docker push 019273956931.dkr.ecr.us-west-1.amazonaws.com/raoof-images:${IMAGE_BASE_NAME}-${IMAGE_TAG}
+          docker push 019273956931.dkr.ecr.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/raoof-images:${IMAGE_BASE_NAME}-${IMAGE_TAG}
 
   Deploy:
     name: Deploy Latest Yolo5 Docker Container
