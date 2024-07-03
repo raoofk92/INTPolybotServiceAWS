@@ -65,4 +65,5 @@ jobs:
           AWS_REGION: 'us-west-1'
         working-directory: ${{ github.workspace }}/yolo5/ansible
         run: |
+          ls -la # List files to check if playbook.yml exists
           ansible-playbook -i aws_ec2.yaml playbook.yml --private-key /home/runner/.ssh/id_rsa.pem --extra-vars "github_run_number=${{ github.run_number }}"
