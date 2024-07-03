@@ -15,6 +15,7 @@ SQS_QUEUE_URL = os.environ['SQS_QUEUE_URL']
 DYNAMODB_TABLE_NAME = os.environ['DYNAMO_NAME']
 TELEGRAM_APP_URL = os.environ["TELEGRAM_APP_URL"]
 
+
 # AWS clients
 sqs_client = boto3.client('sqs', region_name='us-west-1')
 s3_client = boto3.client('s3')
