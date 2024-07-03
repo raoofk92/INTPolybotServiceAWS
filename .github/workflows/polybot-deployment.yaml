@@ -38,3 +38,4 @@ jobs:
           # Push the image to ECR
           docker push 019273956931.dkr.ecr.us-west-1.amazonaws.com/raoof-images:${IMAGE_BASE_NAME}-${IMAGE_TAG}
           
+
