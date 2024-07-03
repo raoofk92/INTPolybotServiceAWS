@@ -10,6 +10,7 @@ import boto3
 
 
 
+
 class Bot:
 
     def __init__(self, token, telegram_chat_url):

@@ -82,6 +82,7 @@ def consume():
                         'time': time.time()
                     }
 
+
                     dynamo_client.put_item(
                         TableName=DYNAMODB_TABLE_NAME,
                         Item=polybot_supp.dict_to_dynamo_format(prediction_summary)
